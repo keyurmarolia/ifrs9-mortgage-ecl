@@ -1,0 +1,76 @@
+project:
+  name: "IFRS 9_Mortgage_ECL_Model"
+  random_seed: 20260821
+
+data:
+  freddie_origination: "data/input/freddie_mac/sample_2015/sample_orig_2015.txt"
+  freddie_performance: "data/input/freddie_mac/sample_2015/sample_perf_2015.txt"
+  fred_unemployment: "data/input/fred/UNRATE.csv"
+  fred_real_gdp: "data/input/fred/GDPC1.csv"
+  fhfa_hpi_monthly: "data/input/fhfa/hpi_po_monthly_hist.xlsx"
+  model_sample_loans: 15000
+  reporting_portfolio_max_loans: 5000
+  chunk_rows: 250000
+
+reporting:
+  reporting_date: "2026-03-01"
+  maximum_projection_months: 600
+
+default:
+  dpd_threshold: 90
+  terminal_credit_codes: ["02", "03", "09", "15"]
+
+pd:
+  calibration_start_date: "2023-04-01"
+  test_start_date: "2024-04-01"
+  training_row_frequency_months: 1
+  class_weight: null
+  probability_floor: 0.000001
+  probability_cap: 0.35
+  maximum_12m_pd: 0.50
+
+sicr:
+  relative_pd_multiple: 2.0
+  absolute_pd_increase: 0.02
+  dpd_backstop: 30
+  modification_is_qualitative_trigger: true
+  prior_default_is_qualitative_trigger: true
+
+scenarios:
+  base:
+    weight: 0.60
+    unemployment_shock_pp: 0.0
+    gdp_growth_shock_pp: 0.0
+    hpi_growth_shock_pp: 0.0
+    mortgage_rate_shock_pp: 0.0
+  upside:
+    weight: 0.20
+    unemployment_shock_pp: -0.75
+    gdp_growth_shock_pp: 1.0
+    hpi_growth_shock_pp: 2.0
+    mortgage_rate_shock_pp: -0.50
+  downside:
+    weight: 0.20
+    unemployment_shock_pp: 2.50
+    gdp_growth_shock_pp: -3.0
+    hpi_growth_shock_pp: -8.0
+    mortgage_rate_shock_pp: 1.25
+
+scenario_weighting:
+  method: "blended_historical_analogue"
+  configured_weight_share: 0.50
+
+lgd:
+  foreclosure_cost_rate: 0.10
+  forced_sale_discount: 0.12
+  recovery_months_completed_fallback: 18
+  recovery_months_incomplete_fallback: 24
+  floor: 0.02
+  cap: 1.0
+
+ead:
+  annual_prepayment_floor: 0.0
+  annual_prepayment_cap: 0.20
+
+discounting:
+  eir_approximation: "current contractual mortgage rate"
