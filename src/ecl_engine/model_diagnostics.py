@@ -15,7 +15,7 @@ def _plain_interval_labels(series: pd.Series) -> pd.Series:
             text,
             flags=re.IGNORECASE,
         )
-    return series.map(label)
+    return series.astype(object).map(label).astype("string")
 
 
 def ks_statistic(y_true, probability) -> float:
@@ -50,7 +50,8 @@ def woe_iv_table(frame: pd.DataFrame, target: str, variables: list[str], bins: i
         series = frame[variable]
         if pd.api.types.is_numeric_dtype(series) and series.nunique(dropna=True) > bins:
             try:
-                grouped = _plain_interval_labels(pd.qcut(series, q=bins, duplicates="drop"))
+                cut = pd.qcut(series, q=bins, duplicates="drop")
+                grouped = _plain_interval_labels(cut).where(cut.notna(), "Missing")
             except ValueError:
                 grouped = series.astype(str)
         else:
@@ -81,5 +82,11 @@ def calibration_table(y_true, probability, groups: int = 10) -> pd.DataFrame:
         observed_rate=("target", "mean"), predicted_rate=("predicted_pd", "mean")
     )
     result["calibration_ratio"] = result["predicted_rate"] / result["observed_rate"].replace(0, np.nan)
-    result["band"] = _plain_interval_labels(result["band"])
+    def probability_band(value):
+        if isinstance(value, pd.Interval):
+            lower = max(float(value.left), 0.0)
+            upper = max(float(value.right), 0.0)
+            return f"{lower:.4%} to {upper:.4%}"
+        return str(value)
+    result["band"] = result["band"].map(probability_band)
     return result

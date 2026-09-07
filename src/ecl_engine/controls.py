@@ -4,7 +4,7 @@ import numpy as np
 import pandas as pd
 
 
-def run_controls(origination, panel, macro, portfolio, scenarios, cube, loan_ecl, stage_summary) -> pd.DataFrame:
+def run_controls(origination, panel, macro, portfolio, scenarios, cube, loan_ecl, stage_summary, recoveries) -> pd.DataFrame:
     def maximum_absolute(series: pd.Series) -> float:
         return float(series.abs().max()) if not series.empty else 0.0
 
@@ -18,6 +18,11 @@ def run_controls(origination, panel, macro, portfolio, scenarios, cube, loan_ecl
     stage2_horizon = performing[performing["stage"].eq(2)].groupby("loan_id")["future_month"].max()
     expected_stage2 = portfolio.set_index("loan_id").loc[stage2_horizon.index, "ecl_horizon_months"]
     stage3 = cube[cube["stage"].eq(3)]
+    reporting_date = pd.Timestamp(portfolio["period"].max())
+    reporting_macro = macro.loc[
+        macro["period"].eq(reporting_date),
+        ["unemployment_rate", "gdp_growth_yoy", "hpi_growth_yoy"],
+    ]
     controls = [
         ("C01", "Origination loan IDs unique", int(origination["loan_id"].duplicated().sum()), 0),
         ("C02", "Loan-month keys unique", int(panel.duplicated(["loan_id", "period"]).sum()), 0),
@@ -29,8 +34,10 @@ def run_controls(origination, panel, macro, portfolio, scenarios, cube, loan_ecl
         ("C08", "EAD non-negative", int((cube["ead"] < -1e-8).sum()), 0),
         ("C09", "Discount factors in (0,1]", int(((cube["discount_factor"] <= 0) | (cube["discount_factor"] > 1.0000001)).sum()), 0),
         ("C10", "Portfolio ECL equals sum of loan ECL", round(float(stage_summary["ecl"].sum() - loan_ecl["loan_ecl"].sum()), 6), 0.0),
-        ("C11", "All source rows explicitly non-synthetic", int(origination["synthetic_field_flag"].sum()), 0),
-        ("C12", "Macro history available", int(macro.empty), 0),
+        ("C11", "Origination synthetic-field flags are false", int(origination["synthetic_field_flag"].fillna(True).sum()), 0),
+        ("C12", "Macro inputs cover the reporting date without missing model variables", int(
+            len(reporting_macro) != 1 or reporting_macro.isna().to_numpy().any()
+        ), 0),
         ("C13", "Projection keys unique", int(cube.duplicated(["loan_id", "scenario", "future_month"]).sum()), 0),
         ("C14", "All loans have every configured scenario", int((cube.groupby("loan_id")["scenario"].nunique() != scenarios["scenario"].nunique()).sum()), 0),
         ("C15", "Core projection values finite", int((~np.isfinite(cube[finite_columns].to_numpy(float))).sum()), 0),
@@ -60,6 +67,24 @@ def run_controls(origination, panel, macro, portfolio, scenarios, cube, loan_ecl
             or (scenario_totals["Base"] > scenario_totals["Downside"] + 1e-6)
         )
     controls.append(("C25", "Scenario ECL ordering is Upside <= Base <= Downside", ecl_ordering_violations, 0))
+    controls.extend([
+        ("C26", "Stage 3 performing-PD and deterioration fields are not applicable", int(
+            portfolio.loc[portfolio["stage"].eq(3), [
+                "current_pd_12m", "current_lifetime_pd", "lifetime_pd_ratio",
+                "lifetime_pd_absolute_change",
+            ]].notna().sum().sum()
+        ), 0),
+        ("C27", "Recovery records have positive EAD at default", int(recoveries["ead_at_default"].fillna(0).le(0).sum()), 0),
+        ("C28", "Observed Freddie actual-loss components reconcile under detected sign convention", int(
+            recoveries.loc[recoveries["actual_loss"].notna(), "actual_loss_formula_difference"].abs().gt(0.02).sum()
+        ), 0),
+        ("C29", "Macro history records the configured publication-lag policy", int(
+            ~macro["source_status"].astype(str).str.contains("publication lags", case=False).all()
+        ), 0),
+        ("C30", "Discounted workout recoveries do not exceed EAD at default", int(
+            (recoveries["total_discounted_recoveries"] > recoveries["ead_at_default"] + 0.01).sum()
+        ), 0),
+    ])
     result = pd.DataFrame(controls, columns=["control_id", "description", "actual", "expected"])
     result["status"] = np.where(np.isclose(result["actual"].astype(float), result["expected"].astype(float), atol=1e-5), "PASS", "FAIL")
     return result

@@ -64,13 +64,15 @@ def load_performance(cfg: dict, loan_ids: set[str]) -> pd.DataFrame:
 
 
 def load_macro_history(cfg: dict) -> pd.DataFrame:
-    """Combine official FRED unemployment/GDP and FHFA national HPI without silent interpolation labels."""
+    """Combine official macro series and align them to when they would be available."""
     unemp = pd.read_csv(cfg["data"]["fred_unemployment"])
     unemp.columns = ["period", "unemployment_rate"]
     unemp["period"] = pd.to_datetime(unemp["period"]).dt.to_period("M").dt.to_timestamp()
+    unemp["unemployment_rate"] = pd.to_numeric(unemp["unemployment_rate"], errors="coerce")
     gdp = pd.read_csv(cfg["data"]["fred_real_gdp"])
     gdp.columns = ["period", "real_gdp"]
     gdp["period"] = pd.to_datetime(gdp["period"]).dt.to_period("M").dt.to_timestamp()
+    gdp["real_gdp"] = pd.to_numeric(gdp["real_gdp"], errors="coerce")
     gdp = gdp.set_index("period").resample("MS").ffill().reset_index()
     hpi_raw = pd.read_excel(cfg["data"]["fhfa_hpi_monthly"], sheet_name=0, header=3)
     month_col = hpi_raw.columns[0]
@@ -84,7 +86,21 @@ def load_macro_history(cfg: dict) -> pd.DataFrame:
     macro[["unemployment_rate", "real_gdp", "hpi_index"]] = macro[["unemployment_rate", "real_gdp", "hpi_index"]].ffill()
     macro["gdp_growth_yoy"] = macro["real_gdp"].pct_change(12) * 100
     macro["hpi_growth_yoy"] = macro["hpi_index"].pct_change(12) * 100
+    lags = {
+        "unemployment_rate": int(cfg["macro"]["unemployment_publication_lag_months"]),
+        "real_gdp": int(cfg["macro"]["gdp_publication_lag_months"]),
+        "gdp_growth_yoy": int(cfg["macro"]["gdp_publication_lag_months"]),
+        "hpi_index": int(cfg["macro"]["hpi_publication_lag_months"]),
+        "hpi_growth_yoy": int(cfg["macro"]["hpi_publication_lag_months"]),
+    }
+    for column, months in lags.items():
+        macro[column] = macro[column].shift(months)
+    if bool(cfg["macro"].get("use_reporting_date_cutoff", True)):
+        macro = macro[macro["period"] <= pd.Timestamp(cfg["reporting"]["reporting_date"])].copy()
     # Freddie sample has fixed-rate mortgages; PMMS is absent, so portfolio weighted note rate is used later and disclosed.
     macro["mortgage_rate"] = np.nan
-    macro["source_status"] = "official observations; GDP carried forward between quarterly releases"
+    macro["source_status"] = (
+        "official observations aligned with configured publication lags; "
+        "GDP carried forward between quarterly releases; revised-history limitation disclosed"
+    )
     return macro.dropna(subset=["period"]).reset_index(drop=True)

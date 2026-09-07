@@ -8,15 +8,15 @@ C06,Projection probabilities within bounds,0.0,0.0,PASS
 C07,LGD within bounds,0.0,0.0,PASS
 C08,EAD non-negative,0.0,0.0,PASS
 C09,"Discount factors in (0,1]",0.0,0.0,PASS
-C10,Portfolio ECL equals sum of loan ECL,0.0,0.0,PASS
-C11,All source rows explicitly non-synthetic,0.0,0.0,PASS
-C12,Macro history available,0.0,0.0,PASS
+C10,Portfolio ECL equals sum of loan ECL,-0.0,0.0,PASS
+C11,Origination synthetic-field flags are false,0.0,0.0,PASS
+C12,Macro inputs cover the reporting date without missing model variables,0.0,0.0,PASS
 C13,Projection keys unique,0.0,0.0,PASS
 C14,All loans have every configured scenario,0.0,0.0,PASS
 C15,Core projection values finite,0.0,0.0,PASS
 C16,Performing probability values finite,0.0,0.0,PASS
 C17,Marginal PD equals survival times conditional PD,0.0,0.0,PASS
-C18,Base 12-month cumulative PD reconciles to scored PD,7.91033905045424e-16,0.0,PASS
+C18,Base 12-month cumulative PD reconciles to scored PD,9.992007221626409e-16,0.0,PASS
 C19,Stage 2 horizon equals remaining modelled lifetime,0.0,0.0,PASS
 C20,Performing period ECL formula reconciles,0.0,0.0,PASS
 C21,Stage 3 cash shortfall formula reconciles,0.0,0.0,PASS
@@ -24,3 +24,8 @@ C22,Scenario weights are non-negative,0.0,0.0,PASS
 C23,Reporting snapshot is exact configured date,0.0,0.0,PASS
 C24,Conditional PD ordering is Upside <= Base <= Downside,0.0,0.0,PASS
 C25,Scenario ECL ordering is Upside <= Base <= Downside,0.0,0.0,PASS
+C26,Stage 3 performing-PD and deterioration fields are not applicable,0.0,0.0,PASS
+C27,Recovery records have positive EAD at default,0.0,0.0,PASS
+C28,Observed Freddie actual-loss components reconcile under detected sign convention,0.0,0.0,PASS
+C29,Macro history records the configured publication-lag policy,0.0,0.0,PASS
+C30,Discounted workout recoveries do not exceed EAD at default,0.0,0.0,PASS

@@ -16,6 +16,7 @@ import joblib
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
+import yaml
 from sklearn.compose import ColumnTransformer
 from sklearn.impute import SimpleImputer
 from sklearn.linear_model import LogisticRegression, Ridge
@@ -27,6 +28,7 @@ ROOT = Path.cwd().resolve()
 if not (ROOT / "config").exists():
     ROOT = ROOT.parent
 DB = ROOT / "database" / "ifrs9_ecl.sqlite3"
+CFG = yaml.safe_load((ROOT / "config" / "project.yaml").read_text())
 
 def query(sql):
     with sqlite3.connect(DB) as connection:
@@ -92,6 +94,13 @@ select min(period) first_month, max(period) last_month,
 avg(current_actual_upb) average_upb, avg(current_dpd) average_dpd
 from monthly_loan_performance
 ''')"""),
+C("""query('''
+select
+sum(case when period is null then 1 else 0 end) missing_periods,
+count(*)-count(distinct loan_id || '|' || period) duplicate_loan_months,
+sum(case when current_actual_upb<0 then 1 else 0 end) negative_balances
+from monthly_loan_performance
+''')"""),
 C("""portfolio = query('''select classic_fico, original_dti, current_ltv,
 current_actual_upb, current_dpd, loan_age from reporting_date_portfolio''')
 portfolio.describe(percentiles=[.01,.10,.25,.50,.75,.90,.99]).T"""),
@@ -119,6 +128,7 @@ for i in range(len(matrix.index)):
         ax.text(j, i, f'{matrix.iloc[i,j]:.1%}', ha='center', va='center')
 plt.colorbar(image, ax=ax); plt.tight_layout()"""),
 C('query("select completed_workout, count(*) defaults, avg(workout_lgd) average_lgd from default_workout_recovery group by completed_workout")'),
+M("A cure is a move from a delinquent state to a lower-risk state in the following observed month. Only consecutive monthly records enter the matrix."),
 M("Output: consistent default dates, default events, cure rates and roll rates.")
 ]),
 
@@ -191,6 +201,14 @@ calibration[['band','observations','defaults','observed_rate','predicted_rate','
 C("""plot_data = calibration.reset_index(drop=True)
 ax = plot_data[['observed_rate','predicted_rate']].plot(marker='o')
 ax.set_xlabel('Risk band'); ax.set_ylabel('Default rate'); ax.set_title('Out-of-time calibration')"""),
+M("Odds calibration multiplies raw logistic odds by one constant estimated on the calibration period, then converts the adjusted odds back to probability."),
+C("""production_pd = joblib.load(ROOT / 'outputs' / 'models' / 'pd12_logistic.joblib')
+raw_example = 0.01
+raw_odds = raw_example/(1-raw_example)
+calibrated_odds = raw_odds*production_pd.odds_multiplier
+{'odds_multiplier':production_pd.odds_multiplier,
+ 'raw_pd':raw_example,
+ 'calibrated_pd':calibrated_odds/(1+calibrated_odds)}"""),
 M("Output: current and origination 12-month PD estimates used in SICR and hazard calibration.")
 ]),
 
@@ -216,10 +234,13 @@ hazard_probability = notebook_hazard.predict_proba(hazard_test[hazard_features])
 {'rows':len(hazard_test),'defaults':int(hazard_test.target.sum()),
  'weighted_auc':roc_auc_score(hazard_test.target,hazard_probability,sample_weight=hazard_test.observation_weight)}"""),
 C("""example_q = np.array([0.010,0.015,0.020])
-example_survival = np.r_[1.0, np.cumprod(1-example_q)[:-1]]
+example_smm = 0.004
+example_survival = np.r_[1.0, np.cumprod((1-example_q)*(1-example_smm))[:-1]]
 example_mpd = example_survival*example_q
 pd.DataFrame({'month':[1,2,3],'conditional_pd':example_q,'survival_at_start':example_survival,
-              'marginal_pd':example_mpd,'cumulative_pd':example_mpd.cumsum()})"""),
+              'prepayment_probability':example_smm,'marginal_pd':example_mpd,
+              'cumulative_pd':example_mpd.cumsum()})"""),
+M("The production model raises each raw monthly survival probability to a loan-specific exponent. The exponent is solved by bisection so Base marginal PD over months 1 to 12 equals the separate 12-month PD score. Prepayment remains a competing exit in survival."),
 C("""term = query("select * from pd_term_structure where stage=2 and scenario='Base' and future_month<=120")
 term.head(15)"""),
 C("""fig, ax1 = plt.subplots()
@@ -236,6 +257,10 @@ M("The near-perfect hazard ranking is treated cautiously because delinquency imm
 [
 M("The satellite models monthly hazard log-odds residuals. Unemployment and the negative of GDP and HPI growth are constrained to non-negative coefficients. The production result is a monthly scenario term structure, not one lifetime percentage."),
 C("query('select * from pd_macro_satellite_metrics')"),
+C("""satellite = joblib.load(ROOT / 'outputs' / 'models' / 'pd_macro_satellite.joblib')
+ridge = satellite.model.named_steps['ridge']
+pd.DataFrame({'variable':['unemployment_rate','weak_gdp_growth','weak_hpi_growth'],
+              'coefficient':ridge.coef_})"""),
 C("macro = query(\"select * from macro_scenarios where month_number<=60\"); macro.head()"),
 C("""fig, axes = plt.subplots(1, 3, figsize=(13, 3))
 for name, data in macro.groupby('scenario'):
@@ -263,6 +288,8 @@ C("""recoveries.groupby('completed_workout').agg(
 defaults=('loan_id','count'), ead=('ead_at_default','sum'),
 average_lgd=('workout_lgd','mean'), median_lgd=('workout_lgd','median'),
 average_duration=('recovery_duration_months','mean'))"""),
+C("""recoveries.groupby(['cashflow_sign_convention','ead_at_default_source','recovery_cashflow_source'],
+                           dropna=False).size().rename('defaults').reset_index()"""),
 C("""recoveries.loc[recoveries.completed_workout.eq(1),'workout_lgd'].hist(bins=25)
 plt.xlabel('Workout LGD'); plt.ylabel('Defaults'); plt.title('Completed-workout LGD')"""),
 C("recoveries[['ead_at_default','estimated_ltv_at_default','workout_lgd','recovery_duration_months']].corr()"),
@@ -289,7 +316,8 @@ C("""lgd_data = query('select * from lgd_development_sample where completed_work
 lgd_data['default_date'] = pd.to_datetime(lgd_data.default_date)
 lgd_numeric = ['estimated_ltv_at_default','ead_at_default','original_property_value','unemployment_rate','hpi_growth_yoy','mortgage_insurance_percentage','loan_age_at_default']
 lgd_categorical = ['property_state','property_type','occupancy_status','modification_at_default']
-cutoff = lgd_data.default_date.sort_values().iloc[int(len(lgd_data)*.8)]
+dates = lgd_data.default_date.drop_duplicates().sort_values().reset_index(drop=True)
+cutoff = dates.iloc[min(max(int(len(dates)*.8),1),len(dates)-1)]
 lgd_development = lgd_data[lgd_data.default_date<cutoff]
 lgd_test = lgd_data[lgd_data.default_date>=cutoff]
 lgd_prepare = ColumnTransformer([
@@ -326,7 +354,7 @@ No CCF is used because there is no undrawn commitment."""),
 C("json.loads((ROOT / 'outputs' / 'models' / 'ead_calibration.json').read_text())"),
 C("query('select * from ead_backtest_metrics')"),
 C("""ead_sample = query('select * from ead_development_sample')
-ead_sample['error'] = ead_sample.predicted_next_balance-ead_sample.actual_next_balance
+ead_sample['error'] = ead_sample.predicted_default_balance-ead_sample.actual_default_balance
 ead_sample.groupby('split').agg(rows=('loan_id','count'),mae=('error',lambda x:x.abs().mean()),mean_error=('error','mean'))"""),
 C("""principal, annual_rate, remaining, month = 200000, 5.0, 360, 12
 r = annual_rate/100/12
@@ -353,7 +381,7 @@ group by future_month
 order by future_month
 limit 24
 ''')"""),
-M("The macro model has weak out-of-time ranking. EAD remains scenario-invariant. This conclusion is evidence-based rather than assuming macro variables must affect every component.")
+M("This test concerns voluntary-prepayment ranking. It does not directly model the balance conditional on default. If the macro variables do not add material ranking power, the production EAD remains scenario-invariant and scenario sensitivity enters PD and LGD instead. The displayed scenario mortgage-rate path does not override contractual EIR discounting or conditional EAD.")
 ]),
 
 "11_scenarios_and_weights.ipynb": make(
@@ -361,12 +389,18 @@ M("The macro model has weak out-of-time ranking. EAD remains scenario-invariant.
 "Base, Upside and Downside paths are internally generated assumptions. IFRS 9 does not prescribe their names or probabilities.",
 [
 C("weights = query('select * from scenario_weight_analysis'); weights"),
+C("""blend = CFG['scenario_weighting']['configured_weight_share']
+weights[['scenario','configured_weight','historical_analogue_frequency','selected_weight']].assign(
+recalculated_weight=lambda x: blend*x.configured_weight +
+                            (1-blend)*x.historical_analogue_frequency,
+difference=lambda x: x.recalculated_weight-x.selected_weight)"""),
 C("""query('''select scenario,
 avg(case when month_number<=12 then unemployment_rate end) unemployment_first_year,
 avg(case when month_number<=12 then gdp_growth_yoy end) gdp_first_year,
-avg(case when month_number<=12 then hpi_growth_yoy end) hpi_first_year
+avg(case when month_number<=12 then hpi_growth_yoy end) hpi_first_year,
+avg(case when month_number<=12 then mortgage_rate end) mortgage_rate_first_year
 from macro_scenarios group by scenario''')"""),
-M("Production weights blend the configured judgement and historical analogue frequency in equal proportions. The result is a modelling choice, not an official forecast or an IFRS 9 requirement."),
+M("Production weights blend the configured judgement and historical analogue frequency in equal proportions. The result is a modelling choice, not an official forecast or an IFRS 9 requirement. The mortgage-rate paths provide context; contractual loan rates remain the EIR approximation and EAD is scenario-invariant."),
 C("query('select * from scenario_summary order by scenario')")
 ]),
 
@@ -374,7 +408,10 @@ C("query('select * from scenario_summary order by scenario')")
 "SICR and staging",
 "Staging combines lifetime-PD deterioration, delinquency, the 30-DPD backstop, modification history and default.",
 [
-M("Stage 3 is assigned first. Stage 2 is assigned when any configured SICR trigger applies. Remaining loans are Stage 1."),
+M("Stage 3 is assigned first. Stage 2 is assigned when any configured SICR trigger applies. Remaining loans are Stage 1. Current and origination lifetime PD are calculated from the monthly hazard over the same remaining horizon, so the comparison measures risk deterioration rather than a horizon difference."),
+C("""{'relative_lifetime_pd_multiple':CFG['sicr']['relative_pd_multiple'],
+ 'absolute_lifetime_pd_increase':CFG['sicr']['absolute_pd_increase'],
+ 'dpd_backstop':CFG['sicr']['dpd_backstop']}"""),
 C("query('select * from stage_summary order by stage')"),
 C("""query('''select stage, primary_stage_reason, count(*) loans,
 sum(current_actual_upb) exposure
@@ -399,6 +436,9 @@ detail.head(24)"""),
 C("""detail['recalculated_ecl'] = detail.marginal_pd * detail.lgd * detail.ead * detail.discount_factor
 (detail.period_ecl-detail.recalculated_ecl).abs().max()"""),
 C("""detail.groupby(['scenario','scenario_weight'],as_index=False).period_ecl.sum()"""),
+C("""scenario_totals = detail.groupby(['scenario','scenario_weight'],as_index=False).period_ecl.sum()
+scenario_totals['weighted_contribution'] = scenario_totals.period_ecl*scenario_totals.scenario_weight
+scenario_totals[['scenario','period_ecl','scenario_weight','weighted_contribution']], scenario_totals.weighted_contribution.sum()"""),
 M("SQLite views provide separate Base, Upside and Downside outputs while ecl_projection_cube remains the authoritative calculation table.")
 ]),
 

@@ -16,6 +16,12 @@ reporting:
   reporting_date: "2026-03-01"
   maximum_projection_months: 600
 
+macro:
+  unemployment_publication_lag_months: 1
+  gdp_publication_lag_months: 3
+  hpi_publication_lag_months: 2
+  use_reporting_date_cutoff: true
+
 default:
   dpd_threshold: 90
   terminal_credit_codes: ["02", "03", "09", "15"]
@@ -67,6 +73,7 @@ lgd:
   recovery_months_incomplete_fallback: 24
   floor: 0.02
   cap: 1.0
+  freddie_cashflow_sign_convention: "auto_detect"
 
 ead:
   annual_prepayment_floor: 0.0

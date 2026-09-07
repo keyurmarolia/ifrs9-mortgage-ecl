@@ -15,7 +15,7 @@ Each macroeconomic scenario is calculated in full before its probability weight 
 3. Build loan-month features and delinquency transitions.
 4. Fit the 12-month logistic PD and monthly hazard models.
 5. Fit the PD macroeconomic satellite and construct three scenarios.
-6. Score current and origination risk and assign IFRS 9 stages.
+6. Compare hazard-based current and origination lifetime risk and assign IFRS 9 stages.
 7. Fit workout LGD and project scenario collateral values.
 8. Build conditional mortgage EAD and loan-specific discount factors.
 9. Create the Loan × Scenario × Future Month projection cube.
@@ -57,12 +57,12 @@ The authoritative detailed table is `ecl_projection_cube`. SQLite views provide 
 - Reporting date: 1 March 2026
 - Active mortgages: 3,471
 - Gross exposure: $432,963,771.97
-- Probability-weighted ECL: $424,001.87
-- Coverage ratio: 0.0979%
-- Stage 1: 192 loans
-- Stage 2: 3,261 loans
+- Probability-weighted ECL: $340,767.41
+- Coverage ratio: 0.0787%
+- Stage 1: 241 loans
+- Stage 2: 3,212 loans
 - Stage 3: 18 loans
 
-The saved run reports 25 passing internal controls; these are project checks, not production validation. Scenario ECL before probability weighting is $410,509 for Upside, $419,659 for Base and $458,859 for Downside.
+The saved run reports 30 passing formula, reconciliation, staging, recovery, macro-availability and scenario-ordering controls. These are project checks, not independent model validation. Scenario ECL before probability weighting is $329,484 for Upside, $337,567 for Base and $372,053 for Downside.
 
 Raw loan files and the local SQLite database are excluded from version control. The included notebooks, workbook and account-level reporting outputs use stable `RM` aliases. A fresh clone requires the source files listed in `data/input/README.md` before the pipeline can be rerun.

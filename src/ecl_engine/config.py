@@ -20,7 +20,6 @@ def load_config(path: Path | None = None) -> dict:
         "database": ROOT / "database" / "ifrs9_ecl.sqlite3",
         "models": ROOT / "outputs" / "models",
         "tables": ROOT / "outputs" / "tables",
-        "charts": ROOT / "outputs" / "charts",
         "report": ROOT / "outputs" / "IFRS_9_Mortgage_ECL_Model.xlsx",
     }
     _validate_config(cfg)
@@ -37,6 +36,13 @@ def _validate_config(cfg: dict) -> None:
         raise ValueError("maximum_12m_pd must be between zero and one")
     if pd_timestamp(cfg["pd"]["calibration_start_date"]) >= pd_timestamp(cfg["pd"]["test_start_date"]):
         raise ValueError("PD calibration must begin before the out-of-time test")
+    for key in ("unemployment_publication_lag_months", "gdp_publication_lag_months", "hpi_publication_lag_months"):
+        if int(cfg["macro"][key]) < 0:
+            raise ValueError(f"{key} must be non-negative")
+    if cfg["lgd"].get("freddie_cashflow_sign_convention") not in {
+        "auto_detect", "legacy_recoveries_positive", "current_recoveries_negative"
+    }:
+        raise ValueError("Unsupported Freddie Mac cash-flow sign convention")
     missing = [key for key, value in cfg["data"].items() if isinstance(value, str) and not Path(value).exists()]
     if missing:
         raise FileNotFoundError(f"Configured input files are missing: {missing}")
@@ -48,6 +54,6 @@ def pd_timestamp(value):
 
 
 def ensure_directories(cfg: dict) -> None:
-    for key in ("database", "models", "tables", "charts", "report"):
+    for key in ("database", "models", "tables", "report"):
         path = Path(cfg["paths"][key])
         (path.parent if path.suffix else path).mkdir(parents=True, exist_ok=True)

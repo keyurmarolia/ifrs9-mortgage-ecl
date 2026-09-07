@@ -58,6 +58,7 @@ def _number_format(header: str) -> str | None:
         "scenario_weight", "coverage_ratio", "exposure_share", "ecl_share", "transition_probability",
         "current_pd_12m", "origination_pd_12m", "current_lifetime_pd", "origination_lifetime_pd",
         "marginal_pd", "conditional_pd", "survival_probability", "cumulative_pd", "lgd",
+        "loan_average_marginal_pd", "loan_average_lgd",
         "average_lgd", "observed_lgd", "predicted_lgd", "roc_auc", "gini", "ks", "brier_score",
         "observed_rate", "predicted_rate", "default_rate", "mae", "rmse", "r_squared",
         "mape", "weighted_absolute_percentage_error", "macro_auc_improvement",
@@ -96,6 +97,11 @@ def _safe_value(value):
 
 def _write_frame(ws, frame: pd.DataFrame) -> None:
     headers = list(frame.columns)
+    explanatory_headers = {
+        "description", "validation_design", "validation_status", "production_role",
+        "method", "target", "trace_explanation", "recovery_cashflow_source",
+        "ead_method", "lgd_method", "discount_rate_method", "source_status",
+    }
     ws.append(headers)
     for row in frame.itertuples(index=False, name=None):
         ws.append([_safe_value(value) for value in row])
@@ -123,6 +129,11 @@ def _write_frame(ws, frame: pd.DataFrame) -> None:
                 if item.row <= 200:
                     max_len = max(max_len, len(str(item.value)) if item.value is not None else 0)
         width = min(max(max_len + 2, 11), 30)
+        if header.lower() in explanatory_headers:
+            width = min(max(max_len + 2, 30), 60)
+            for row in range(2, ws.max_row + 1):
+                ws.cell(row, col_index).alignment = Alignment(wrap_text=True, vertical="top")
+                ws.row_dimensions[row].height = max(ws.row_dimensions[row].height or 15, 30)
         if "date" in header.lower() or header.lower() == "period":
             width = max(width, 13)
         ws.column_dimensions[get_column_letter(col_index)].width = width
@@ -154,8 +165,8 @@ def _dashboard(wb: Workbook) -> None:
         for cell in row:
             cell.fill = PatternFill("solid", fgColor=NAVY)
     scenario_rows = {scen_ws.cell(row, 1).value: row for row in range(2, scen_ws.max_row + 1)}
-    weight_text = " • ".join(f"{name} {scen_ws.cell(row, 2).value:.0%}" for name, row in scenario_rows.items())
-    ws["A3"] = "Loan-level, scenario-weighted and discounted ECL | " + weight_text
+    weight_text = ", ".join(f"{name} {scen_ws.cell(row, 2).value:.0%}" for name, row in scenario_rows.items())
+    ws["A3"] = "Loan-level, scenario-weighted and discounted ECL. " + weight_text
     ws["A3"].font = Font(name="Aptos", size=10, italic=True, color=BLUE)
     ws["A3"].alignment = Alignment(horizontal="left")
     for cell in ws[3][:14]:
@@ -272,6 +283,8 @@ def _sources_sheet(wb: Workbook, cfg: dict) -> None:
         ("FRED real GDP", "https://fred.stlouisfed.org/series/GDPC1"),
         ("FHFA HPI", "https://www.fhfa.gov/data/hpi"),
         ("Reporting date", cfg["reporting"]["reporting_date"]),
+        ("Macro availability", "Publication lags applied: unemployment 1 month, GDP 3 months, HPI 2 months"),
+        ("Macro history limitation", "Current revised histories are used because point-in-time vintage files were not supplied"),
         ("Scenario weights", "Selected by the configured blend of management assumptions and historical macro-regime frequencies"),
         ("Default", "90+ DPD, REO, or configured credit-related terminal event"),
         ("EIR approximation", cfg["discounting"]["eir_approximation"]),
@@ -289,6 +302,10 @@ def build_excel_report(cfg: dict) -> Path:
     output = Path(cfg["paths"]["report"])
     wb = Workbook()
     wb.remove(wb.active)
+    wb.properties.creator = "Keyur Marolia"
+    wb.properties.lastModifiedBy = "Keyur Marolia"
+    wb.properties.title = "IFRS 9 Mortgage Expected Credit Loss Model"
+    wb.properties.subject = "Residential mortgage PD, LGD, EAD, staging and scenario-weighted ECL"
     for file_name, sheet_name in SHEETS:
         frame = pd.read_csv(table_dir / file_name)
         for col in frame.columns:

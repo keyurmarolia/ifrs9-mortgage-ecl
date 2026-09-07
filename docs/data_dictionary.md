@@ -4,8 +4,8 @@
 
 - `origination_mortgages`: one row per loan with initial borrower, collateral and contractual terms plus retained original property-value estimate and `synthetic_field_flag`.
 - `monthly_loan_performance`: one row per real loan-month with balance, delinquency, modification, terminal status, default event/date and recovery fields.
-- `default_workout_recovery`: one row per default with EAD, discounted observed/modelled recoveries, completion flags, actual-loss indicator, duration and workout LGD.
-- `macroeconomic_history`: official monthly unemployment/HPI and forward-filled quarterly real GDP with derived yearly growth.
+- `default_workout_recovery`: one row per default with EAD, EAD source, sign-normalised recovery source, observed and remaining discounted recoveries, uncapped and LGD-capped total recoveries, completion flags, actual-loss reconciliation, duration and workout LGD.
+- `macroeconomic_history`: official monthly unemployment/HPI and forward-filled quarterly real GDP with derived yearly growth, configured availability lags and a revised-history limitation flag in `source_status`.
 - `reporting_date_portfolio`: active loan population with current/origination PD, lifetime-PD comparison, every staging trigger, stage and horizon.
 - `ecl_projection_cube`: Loan × Scenario × FutureMonth audit table.
 

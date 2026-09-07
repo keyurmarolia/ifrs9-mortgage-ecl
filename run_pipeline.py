@@ -51,41 +51,46 @@ def main() -> int:
     pd_development_sample = build_notebook_development_sample(features, cfg)
     pd_coefficients = pd.concat([coefficient_table(pd_models.pd12, "12-month PD"), coefficient_table(pd_models.hazard, "monthly hazard")])
 
-    print("5/12 Selecting reporting-date active portfolio and assigning IFRS 9 stages", flush=True)
+    print("5/12 Selecting the reporting-date active portfolio", flush=True)
     portfolio = reporting_portfolio(features, cfg)
-    portfolio = assign_stages(portfolio, pd_models.pd12, macro, cfg)
 
     print("6/12 Building Base/Upside/Downside macroeconomic scenarios", flush=True)
     scenarios = build_scenarios(macro, portfolio, cfg)
     scenarios, scenario_weight_metrics = calibrate_scenario_weights(macro, scenarios, cfg)
 
-    print("7/12 Fitting workout LGD and estimating EAD behaviour", flush=True)
+    behavioral = estimate_behavioral_prepayment(panel, cfg)
+    print("7/12 Calculating hazard-based SICR measures and assigning IFRS 9 stages", flush=True)
+    portfolio = assign_stages(
+        portfolio, pd_models.pd12, pd_models.hazard, pd_models.macro_satellite,
+        scenarios, behavioral, macro, cfg,
+    )
+
+    print("8/12 Fitting workout LGD and validating EAD behaviour", flush=True)
     lgd_model = fit_lgd_model(recoveries, macro, panel)
     lgd_development_sample = prepare_lgd_development_data(recoveries, macro, panel)
-    behavioral = estimate_behavioral_prepayment(panel, cfg)
-    ead_backtest_metrics = ead_backtest(panel, behavioral)
-    ead_development_sample = ead_backtest_sample(panel, behavioral)
+    ead_backtest_metrics = ead_backtest(panel, behavioral, cfg)
+    ead_development_sample = ead_backtest_sample(panel, behavioral, cfg)
     ead_macro_metrics = ead_macro_sensitivity(features, cfg)
 
-    print("8/12 Building Loan x Scenario x Month EAD and LGD paths", flush=True)
+    print("9/12 Building Loan x Scenario x Month EAD and LGD paths", flush=True)
     cube = build_projection_frame(portfolio, scenarios, behavioral, cfg)
     cube = add_lgd_paths(cube, portfolio, lgd_model, cfg)
     cube = add_discount_factors(cube)
 
-    print("9/12 Producing monthly conditional, survival, marginal and cumulative PD paths", flush=True)
+    print("10/12 Producing monthly conditional, survival, marginal and cumulative PD paths", flush=True)
     cube = add_lifetime_pd_paths(cube, portfolio, pd_models.hazard, pd_models.macro_satellite, behavioral, cfg)
     cube = add_performing_ecl(cube)
     stage3 = build_stage3_cube(portfolio, scenarios, cfg)
     if not stage3.empty:
         cube = pd.concat([cube, stage3], ignore_index=True, sort=False)
 
-    print("10/12 Aggregating scenario, loan, stage and portfolio ECL", flush=True)
+    print("11/12 Aggregating scenario, loan, stage and portfolio ECL", flush=True)
     scenario_ecl, loan_ecl, stage_summary = aggregate_ecl(cube, portfolio)
     trace_summary, trace_monthly = worked_traces(cube, loan_ecl)
-    controls = run_controls(origination, panel, macro, portfolio, scenarios, cube, loan_ecl, stage_summary)
+    controls = run_controls(origination, panel, macro, portfolio, scenarios, cube, loan_ecl, stage_summary, recoveries)
     if controls["status"].eq("FAIL").any():
         raise RuntimeError("Controls failed:\n" + controls.loc[controls["status"].eq("FAIL")].to_string(index=False))
-    print("11/12 Writing authoritative SQLite database and reporting tables", flush=True)
+    print("12/12 Writing SQLite, reporting tables and workbook", flush=True)
     tables = build_reporting_tables(
         portfolio, transitions, scenarios, cube, scenario_ecl, loan_ecl, stage_summary,
         pd_models.metrics, pd_models.woe_iv, pd_models.calibration, lgd_model.metrics,
@@ -108,7 +113,7 @@ def main() -> int:
     (Path(cfg["paths"]["models"]) / "ead_calibration.json").write_text(json.dumps(behavioral, indent=2), encoding="utf-8")
 
     if not args.skip_workbook:
-        print("12/12 Creating Excel reporting workbook", flush=True)
+        print("Creating Excel reporting workbook", flush=True)
         build_excel_report(cfg)
     total = loan_ecl["loan_ecl"].sum()
     exposure = loan_ecl["gross_exposure"].sum()

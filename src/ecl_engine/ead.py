@@ -11,14 +11,16 @@ from sklearn.preprocessing import StandardScaler
 
 
 def estimate_behavioral_prepayment(panel: pd.DataFrame, cfg: dict) -> dict:
-    exposure_years = max(panel["current_actual_upb"].gt(0).sum() / 12, 1)
-    voluntary = panel["zero_balance_code"].fillna("").eq("01").sum()
+    cutoff = pd.Timestamp(cfg["pd"]["test_start_date"])
+    development_panel = panel[panel["period"] < cutoff]
+    exposure_years = max(development_panel["current_actual_upb"].gt(0).sum() / 12, 1)
+    voluntary = development_panel["zero_balance_code"].fillna("").eq("01").sum()
     annual_rate = float(np.clip(voluntary / exposure_years, cfg["ead"]["annual_prepayment_floor"], cfg["ead"]["annual_prepayment_cap"]))
     smm = 1 - (1 - annual_rate) ** (1 / 12)
     # Compare observed balances immediately before default with contractual-like prior balances.
     ordered = panel.sort_values(["loan_id", "period"]).copy()
     ordered["prior_upb"] = ordered.groupby("loan_id")["current_actual_upb"].shift(1)
-    default_rows = ordered[ordered["default_event"].eq(1)].copy()
+    default_rows = ordered[ordered["default_event"].eq(1) & ordered["period"].lt(cutoff)].copy()
     default_rows["prior_rate"] = ordered.groupby("loan_id")["current_interest_rate"].shift(1).loc[default_rows.index]
     default_rows["prior_remaining"] = ordered.groupby("loan_id")["remaining_months_to_legal_maturity"].shift(1).loc[default_rows.index]
     expected = contractual_balance(
@@ -31,25 +33,34 @@ def estimate_behavioral_prepayment(panel: pd.DataFrame, cfg: dict) -> dict:
     return {"annual_conditional_prepayment_rate": annual_rate, "monthly_single_mortality": smm, "balance_at_default_adjustment": float(np.clip(bad_factor, 0.95, 1.05))}
 
 
-def ead_backtest(panel: pd.DataFrame, behavioral: dict) -> pd.DataFrame:
-    """Compare one-month balance forecasts with observed next-month balances."""
+def _default_balance_sample(panel: pd.DataFrame, behavioral: dict, cfg: dict) -> pd.DataFrame:
     ordered = panel.sort_values(["loan_id", "period"]).copy()
     groups = ordered.groupby("loan_id", sort=False)
-    ordered["next_period"] = groups["period"].shift(-1)
-    ordered["actual_next_balance"] = groups["current_actual_upb"].shift(-1)
-    month_gap = (ordered["next_period"].dt.year - ordered["period"].dt.year) * 12 + (ordered["next_period"].dt.month - ordered["period"].dt.month)
-    sample = ordered[month_gap.eq(1) & ordered["current_actual_upb"].gt(0) & ordered["actual_next_balance"].gt(0)].copy()
-    sample["predicted_next_balance"] = contractual_balance(
-        sample["current_actual_upb"].to_numpy(float),
-        sample["current_interest_rate"].fillna(0).to_numpy(float),
-        sample["remaining_months_to_legal_maturity"].fillna(1).to_numpy(float),
+    ordered["prior_period"] = groups["period"].shift(1)
+    ordered["prior_upb"] = groups["current_actual_upb"].shift(1)
+    ordered["prior_rate"] = groups["current_interest_rate"].shift(1)
+    ordered["prior_remaining"] = groups["remaining_months_to_legal_maturity"].shift(1)
+    month_gap = (ordered["period"].dt.year - ordered["prior_period"].dt.year) * 12 + (ordered["period"].dt.month - ordered["prior_period"].dt.month)
+    sample = ordered[ordered["default_event"].eq(1) & month_gap.eq(1) & ordered["prior_upb"].gt(0)].copy()
+    sample["actual_default_balance"] = sample["current_actual_upb"].where(sample["current_actual_upb"].gt(0))
+    sample["actual_default_balance"] = sample["actual_default_balance"].fillna(sample["zero_balance_removal_upb"].where(sample["zero_balance_removal_upb"].gt(0))).fillna(sample["prior_upb"])
+    sample["predicted_default_balance"] = contractual_balance(
+        sample["prior_upb"].to_numpy(float),
+        sample["prior_rate"].fillna(0).to_numpy(float),
+        sample["prior_remaining"].fillna(1).to_numpy(float),
         np.ones(len(sample)),
     ) * behavioral["balance_at_default_adjustment"]
-    cutoff = sample["period"].max() - pd.DateOffset(months=24)
+    sample["split"] = np.where(sample["period"] < pd.Timestamp(cfg["pd"]["test_start_date"]), "development", "out_of_time")
+    return sample
+
+
+def ead_backtest(panel: pd.DataFrame, behavioral: dict, cfg: dict) -> pd.DataFrame:
+    """Compare predicted and observed balances in the first default month."""
+    sample = _default_balance_sample(panel, behavioral, cfg)
     rows = []
-    for name, data in [("development", sample[sample["period"] < cutoff]), ("out_of_time", sample[sample["period"] >= cutoff])]:
-        actual = data["actual_next_balance"].to_numpy(float)
-        predicted = data["predicted_next_balance"].to_numpy(float)
+    for name, data in sample.groupby("split"):
+        actual = data["actual_default_balance"].to_numpy(float)
+        predicted = data["predicted_default_balance"].to_numpy(float)
         denominator = np.maximum(actual, 1000)
         rows.append({
             "sample": name,
@@ -59,25 +70,15 @@ def ead_backtest(panel: pd.DataFrame, behavioral: dict) -> pd.DataFrame:
             "mape": float(np.mean(np.abs(actual - predicted) / denominator)),
             "weighted_absolute_percentage_error": float(np.abs(actual - predicted).sum() / max(actual.sum(), 1)),
             "mean_error_usd": float(np.mean(predicted - actual)),
+            "target": "balance in first default month",
         })
     return pd.DataFrame(rows)
 
 
-def ead_backtest_sample(panel: pd.DataFrame, behavioral: dict, rows_per_split: int = 5000) -> pd.DataFrame:
-    ordered = panel.sort_values(["loan_id", "period"]).copy()
-    groups = ordered.groupby("loan_id", sort=False)
-    ordered["next_period"] = groups["period"].shift(-1)
-    ordered["actual_next_balance"] = groups["current_actual_upb"].shift(-1)
-    month_gap = (ordered["next_period"].dt.year - ordered["period"].dt.year) * 12 + (ordered["next_period"].dt.month - ordered["period"].dt.month)
-    sample = ordered[month_gap.eq(1) & ordered["current_actual_upb"].gt(0) & ordered["actual_next_balance"].gt(0)].copy()
-    sample["predicted_next_balance"] = contractual_balance(
-        sample["current_actual_upb"].to_numpy(float), sample["current_interest_rate"].fillna(0).to_numpy(float),
-        sample["remaining_months_to_legal_maturity"].fillna(1).to_numpy(float), np.ones(len(sample)),
-    ) * behavioral["balance_at_default_adjustment"]
-    cutoff = sample["period"].max() - pd.DateOffset(months=24)
-    sample["split"] = np.where(sample["period"] < cutoff, "development", "out_of_time")
+def ead_backtest_sample(panel: pd.DataFrame, behavioral: dict, cfg: dict, rows_per_split: int = 5000) -> pd.DataFrame:
+    sample = _default_balance_sample(panel, behavioral, cfg)
     selected = [group.sample(min(len(group), rows_per_split), random_state=20260821) for _, group in sample.groupby("split")]
-    return pd.concat(selected, ignore_index=True)[["loan_id", "period", "split", "current_actual_upb", "current_interest_rate", "remaining_months_to_legal_maturity", "actual_next_balance", "predicted_next_balance"]]
+    return pd.concat(selected, ignore_index=True)[["loan_id", "period", "split", "prior_upb", "prior_rate", "prior_remaining", "actual_default_balance", "predicted_default_balance"]]
 
 
 def ead_macro_sensitivity(features: pd.DataFrame, cfg: dict) -> pd.DataFrame:

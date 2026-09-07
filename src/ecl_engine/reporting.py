@@ -16,20 +16,35 @@ def _risk_grade(pd12: pd.Series) -> pd.Categorical:
 def build_reporting_tables(portfolio, transitions, scenarios, cube, scenario_ecl, loan_ecl, stage_summary, pd_metrics, pd_woe_iv, pd_calibration, lgd_metrics, ead_backtest_metrics, ead_macro_metrics, scenario_weight_metrics, pd_macro_metrics, recoveries, controls, trace_summary, trace_monthly) -> dict[str, pd.DataFrame]:
     total_exposure = loan_ecl["gross_exposure"].sum()
     total_ecl = loan_ecl["loan_ecl"].sum()
+    performing_loans = loan_ecl[loan_ecl["stage"].isin([1, 2])]
+    performing_exposure = performing_loans["gross_exposure"].sum()
+    performing_cube = cube[cube["stage"].isin([1, 2])].copy()
+    performing_cube["lgd_driver_weight"] = (
+        performing_cube["scenario_weight"] * performing_cube["marginal_pd"]
+        * performing_cube["ead"] * performing_cube["discount_factor"]
+    )
+    lgd_denominator = performing_cube["lgd_driver_weight"].sum()
+    ecl_driver_lgd = (
+        (performing_cube["lgd"] * performing_cube["lgd_driver_weight"]).sum() / lgd_denominator
+        if lgd_denominator else np.nan
+    )
     executive = pd.DataFrame([
         {"metric": "Reporting date", "value": str(portfolio["period"].max().date()), "unit": "date"},
         {"metric": "Mortgage accounts", "value": len(loan_ecl), "unit": "count"},
         {"metric": "Gross exposure", "value": total_exposure, "unit": "USD"},
         {"metric": "Probability-weighted ECL", "value": total_ecl, "unit": "USD"},
         {"metric": "Portfolio coverage ratio", "value": total_ecl / total_exposure if total_exposure else np.nan, "unit": "percent"},
-        {"metric": "Exposure-weighted 12-month PD", "value": np.average(loan_ecl["current_pd_12m"], weights=loan_ecl["gross_exposure"]) if total_exposure else np.nan, "unit": "percent"},
+        {"metric": "Performing exposure-weighted 12-month PD", "value": np.average(performing_loans["current_pd_12m"], weights=performing_loans["gross_exposure"]) if performing_exposure else np.nan, "unit": "percent"},
     ])
     stage = stage_summary.copy()
     stage["exposure_share"] = stage["gross_exposure"] / total_exposure
     stage["ecl_share"] = stage["ecl"] / total_ecl
     scen = scenario_ecl.groupby(["scenario", "scenario_weight"], as_index=False)["scenario_ecl"].sum()
     scen["weighted_contribution"] = scen["scenario_ecl"] * scen["scenario_weight"]
-    monthly = cube.groupby(["stage", "scenario", "future_month"], as_index=False).agg(ead=("ead", "sum"), marginal_pd=("marginal_pd", "mean"), lgd=("lgd", "mean"), period_ecl=("period_ecl", "sum"))
+    monthly = cube.groupby(["stage", "scenario", "future_month"], as_index=False).agg(
+        ead=("ead", "sum"), marginal_pd=("marginal_pd", "mean"),
+        lgd=("lgd", "mean"), period_ecl=("period_ecl", "sum"))
+    monthly = monthly.rename(columns={"marginal_pd": "loan_average_marginal_pd", "lgd": "loan_average_lgd"})
     pd_dist = loan_ecl.assign(pd_band=pd.cut(loan_ecl["current_pd_12m"], [-np.inf, .005, .01, .02, .05, .10, np.inf], labels=["<=0.5%", "0.5-1%", "1-2%", "2-5%", "5-10%", ">10%"]))
     pd_dist = pd_dist.groupby("pd_band", observed=False, as_index=False).agg(loans=("loan_id", "count"), exposure=("gross_exposure", "sum"), ecl=("loan_ecl", "sum"))
     lgd_dist = cube.groupby("loan_id", as_index=False)["lgd"].mean().merge(loan_ecl[["loan_id", "gross_exposure", "loan_ecl"]], on="loan_id")
@@ -38,14 +53,13 @@ def build_reporting_tables(portfolio, transitions, scenarios, cube, scenario_ecl
     ltv = loan_ecl.assign(ltv_band=pd.cut(loan_ecl["current_ltv"], [0, 50, 60, 70, 80, 90, 100, 125, np.inf], include_lowest=True))
     ltv = ltv.groupby("ltv_band", observed=False, as_index=False).agg(loans=("loan_id", "count"), exposure=("gross_exposure", "sum"), ecl=("loan_ecl", "sum"))
     vintage = loan_ecl.assign(vintage=loan_ecl["origination_date"].dt.year).groupby("vintage", as_index=False).agg(loans=("loan_id", "count"), exposure=("gross_exposure", "sum"), ecl=("loan_ecl", "sum"))
-    risk = loan_ecl.assign(risk_grade=_risk_grade(loan_ecl["current_pd_12m"])).groupby("risk_grade", observed=False, as_index=False).agg(loans=("loan_id", "count"), exposure=("gross_exposure", "sum"), ecl=("loan_ecl", "sum"))
+    risk = performing_loans.assign(risk_grade=_risk_grade(performing_loans["current_pd_12m"])).groupby("risk_grade", observed=False, as_index=False).agg(loans=("loan_id", "count"), exposure=("gross_exposure", "sum"), ecl=("loan_ecl", "sum"))
     dpd = loan_ecl.assign(dpd_band=pd.cut(loan_ecl["current_dpd"].fillna(-1), [-np.inf, -0.1, 29, 59, 89, np.inf], labels=["Unknown", "Current/<30", "30-59", "60-89", "90+"])).groupby("dpd_band", observed=False, as_index=False).agg(loans=("loan_id", "count"), exposure=("gross_exposure", "sum"), ecl=("loan_ecl", "sum"))
     geography = loan_ecl.groupby("property_state", dropna=False, as_index=False).agg(loans=("loan_id", "count"), exposure=("gross_exposure", "sum"), ecl=("loan_ecl", "sum"))
     lifetime_dist = loan_ecl.assign(lifetime_pd_band=pd.cut(loan_ecl["current_lifetime_pd"], [-np.inf, .01, .05, .10, .25, .50, np.inf], labels=["<=1%", "1-5%", "5-10%", "10-25%", "25-50%", ">50%"]))
     lifetime_dist = lifetime_dist.groupby("lifetime_pd_band", observed=False, as_index=False).agg(loans=("loan_id", "count"), exposure=("gross_exposure", "sum"), ecl=("loan_ecl", "sum"))
     # EAD is scenario-invariant in this mortgage implementation; use one scenario to avoid triple counting.
     ead_profile = cube[cube["scenario"].eq("Base")].groupby(["stage", "future_month"], as_index=False)["ead"].sum()
-    performing_cube = cube[cube["stage"].isin([1, 2])].copy()
     pd_term = performing_cube.groupby(["stage", "scenario", "future_month"], as_index=False).agg(
         conditional_pd=("conditional_pd", "mean"), survival_probability=("survival_probability", "mean"),
         marginal_pd=("marginal_pd", "mean"), cumulative_pd=("cumulative_pd", "mean"))
@@ -56,10 +70,19 @@ def build_reporting_tables(portfolio, transitions, scenarios, cube, scenario_ecl
     recovery_summary = recoveries.groupby("completed_workout", as_index=False).agg(defaults=("loan_id", "count"), ead_at_default=("ead_at_default", "sum"), discounted_recoveries=("total_discounted_recoveries", "sum"), average_lgd=("workout_lgd", "mean"))
     scenario_wide = scenario_ecl.pivot(index="loan_id", columns="scenario", values="scenario_ecl").add_suffix("_scenario_ecl").reset_index()
     account = loan_ecl.merge(scenario_wide, on="loan_id", how="left").sort_values(["stage", "loan_ecl"], ascending=[True, False]).copy()
-    loan_lgd = cube.groupby("loan_id", as_index=False)["lgd"].mean().rename(columns={"lgd": "average_lgd"})
+    weighted_lgd = cube.copy()
+    weighted_lgd["lgd_weight"] = np.where(
+        weighted_lgd["stage"].isin([1, 2]),
+        weighted_lgd["scenario_weight"] * weighted_lgd["marginal_pd"].fillna(0) * weighted_lgd["ead"] * weighted_lgd["discount_factor"],
+        weighted_lgd["scenario_weight"] * weighted_lgd["ead"],
+    )
+    weighted_lgd["weighted_lgd"] = weighted_lgd["lgd"] * weighted_lgd["lgd_weight"]
+    loan_lgd = weighted_lgd.groupby("loan_id", as_index=False).agg(weighted_lgd=("weighted_lgd", "sum"), lgd_weight=("lgd_weight", "sum"))
+    loan_lgd["average_lgd"] = loan_lgd["weighted_lgd"] / loan_lgd["lgd_weight"].replace(0, np.nan)
+    loan_lgd = loan_lgd[["loan_id", "average_lgd"]]
     account = account.merge(loan_lgd, on="loan_id", how="left")
     lgd_by_ltv = account.assign(ltv_band=pd.cut(account["current_ltv"], [0, 50, 60, 70, 80, 90, 100, 125, np.inf], include_lowest=True)).groupby("ltv_band", observed=False, as_index=False).agg(loans=("loan_id", "count"), exposure=("gross_exposure", "sum"), average_lgd=("average_lgd", "mean"), ecl=("loan_ecl", "sum"))
-    executive = pd.concat([executive, pd.DataFrame([{"metric": "Exposure-weighted average LGD", "value": np.average(account["average_lgd"], weights=account["gross_exposure"]) if total_exposure else np.nan, "unit": "percent"}])], ignore_index=True)
+    executive = pd.concat([executive, pd.DataFrame([{"metric": "ECL-driver-weighted performing LGD", "value": ecl_driver_lgd, "unit": "percent"}])], ignore_index=True)
     # Public reporting tables use stable portfolio aliases. The local database retains source loan IDs
     # in its authoritative input and calculation tables.
     aliases = {loan_id: f"RM{number:06d}" for number, loan_id in enumerate(sorted(portfolio["loan_id"].astype(str).unique()), start=1)}

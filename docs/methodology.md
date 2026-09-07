@@ -18,19 +18,23 @@ For future month `t`:
 
 `CPD(T) = sum of MPD(1) through MPD(T)`
 
-The Base first-12-month marginal PD sum is calibrated to the loan's 12-month PD. The same calibration exponent applies to all scenarios. Scenario variation enters once through the satellite.
+The Base first-12-month marginal PD sum is calibrated to the loan's 12-month PD. A loan-specific exponent is solved by bisection while voluntary prepayment is treated as a competing exit. The same exponent applies to all scenarios, so scenario variation enters once through the satellite.
+
+The satellite is an economically constrained sensitivity layer. Its out-of-time aggregate fit, number of defaults and coefficients are reported directly; weak validation is not presented as predictive support.
 
 ## LGD
 
-Historical workout LGD equals EAD at default less discounted net recoveries, divided by EAD at default. Completed workouts fit a logit-transformed ridge model using a chronological development and out-of-time split. Incomplete workouts retain a model-estimate flag and use estimated remaining recovery.
+Historical workout LGD equals EAD at default less discounted net recoveries, divided by EAD at default. EAD at default uses positive current UPB, then zero-balance removal UPB, then prior-month UPB. Freddie recovery components are sign-normalised under the convention that best reconciles the reported actual-loss field; the selected convention and formula difference remain in the workout table. Any discounted recovery above UPB EAD is retained in an uncapped field and capped at EAD for the bounded LGD target. Completed workouts fit a logit-transformed ridge model using a chronological development and out-of-time split. Incomplete workouts retain a model-estimate flag and use total expected recovery less cash already observed.
 
 The fitted model provides the Base conditional LGD. Scenario HPI changes projected property value and the collateral shortfall floor for every possible default month.
 
 ## EAD
 
-Conditional mortgage EAD uses the fixed-rate amortization balance, non-interest-bearing deferred UPB and an observed balance-at-default adjustment. Prepayment is included as a competing risk in survival, not as a reduction to EAD conditional on default. No CCF is used because there is no undrawn commitment.
+Conditional mortgage EAD uses the fixed-rate amortization balance, non-interest-bearing deferred UPB and an observed balance-at-default adjustment. That adjustment and its backtest compare the contractual one-month roll-forward from the month before default with the observed first-default-month balance. Prepayment is included as a competing risk in survival, not as a reduction to EAD conditional on default. No CCF is used because there is no undrawn commitment.
 
 The observed macroeconomic prepayment test did not improve out-of-time ranking materially, so EAD is scenario-invariant.
+
+The scenario mortgage-rate path is reported as economic context. It does not replace the loan's contractual EIR and does not alter conditional EAD in this implementation.
 
 ## Discounting and staging
 
@@ -38,7 +42,7 @@ The current contractual mortgage rate is the EIR approximation:
 
 `DF(t) = 1 / (1 + EIR/12)^t`
 
-Stage 3 is assigned first. Stage 2 uses quantitative lifetime-risk deterioration, the 30-DPD backstop, modification and prior-default indicators. Remaining accounts are Stage 1. Stage 1 uses default events in months 1 to 12, Stage 2 uses remaining lifetime, and Stage 3 uses discounted expected recovery cash shortfall.
+Stage 3 is assigned first. Stage 2 uses quantitative lifetime-risk deterioration, the 30-DPD backstop, modification and prior-default indicators. Current and origination lifetime PD are both generated from the monthly hazard over the reporting-date remaining horizon before applying the configured relative and absolute deterioration tests. Remaining accounts are Stage 1. Stage 1 uses default events in months 1 to 12, Stage 2 uses remaining lifetime, and Stage 3 uses discounted expected recovery cash shortfall. Performing PD fields are not applicable for Stage 3 accounts.
 
 ## ECL and scenario weighting
 

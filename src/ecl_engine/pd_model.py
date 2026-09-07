@@ -110,11 +110,21 @@ def _fit_macro_satellite(sample: pd.DataFrame, hazard_model: Pipeline, cfg: dict
             "sample": name, "months": len(data), "defaults": int(data["defaults"].sum()),
             "mae_log_odds": mean_absolute_error(actual, prediction) if len(data) else np.nan,
             "r_squared": r2_score(actual, prediction) if len(data) > 1 else np.nan,
+            "validation_design": "chronological monthly aggregate split",
         })
     coefficients = model.named_steps["ridge"].coef_
     for variable, coefficient in zip(design.columns, coefficients):
         rows.append({"sample": "coefficient", "variable": variable, "coefficient": float(coefficient)})
-    return MacroSatellite(model, reference, pd.DataFrame(rows))
+    metrics = pd.DataFrame(rows)
+    test_r2 = metrics.loc[metrics["sample"].eq("out_of_time"), "r_squared"]
+    test_defaults = metrics.loc[metrics["sample"].eq("out_of_time"), "defaults"]
+    limited = test_r2.empty or test_defaults.empty or float(test_r2.iloc[0]) < 0 or float(test_defaults.iloc[0]) < 50
+    metrics["validation_status"] = (
+        "limited: weak out-of-time evidence; used as constrained scenario sensitivity"
+        if limited else "supported by out-of-time aggregate validation"
+    )
+    metrics["production_role"] = "economically constrained PD scenario satellite"
+    return MacroSatellite(model, reference, metrics)
 
 
 def fit_pd_models(features: pd.DataFrame, cfg: dict) -> PDModels:
@@ -155,7 +165,13 @@ def fit_pd_models(features: pd.DataFrame, cfg: dict) -> PDModels:
             variables = pd12_features if name.startswith("12-month") else hazard_features
             pred = model.predict_proba(data[variables])[:, 1]
             performance = model_performance(data[target], pred)
-            metrics.append({"model": name, "sample": split_name, "rows": len(data), "defaults": int(data[target].sum()), **performance, "brier_score": brier_score_loss(data[target], pred), "observed_rate": data[target].mean(), "predicted_rate": pred.mean()})
+            metrics.append({
+                "model": name, "sample": split_name, "rows": len(data),
+                "defaults": int(data[target].sum()), **performance,
+                "brier_score": brier_score_loss(data[target], pred),
+                "observed_rate": data[target].mean(), "predicted_rate": pred.mean(),
+                "validation_design": "chronological loan-month split; repeated loans may occur across periods",
+            })
     screening_variables = list(dict.fromkeys(PD12_NUMERIC_FEATURES + CATEGORICAL_PD_FEATURES))
     pd_woe = woe_iv_table(pd_train, "target_default_12m", screening_variables).assign(model="12-month logistic PD")
     hazard_woe = woe_iv_table(hazard_train, "next_default_event", hazard_features).assign(model="discrete-time monthly hazard")
