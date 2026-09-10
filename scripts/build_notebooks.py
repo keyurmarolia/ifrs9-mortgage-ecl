@@ -72,6 +72,7 @@ M("""Calculation order
 5. Create monthly PD, LGD, EAD and discount-factor terms.
 6. Calculate scenario ECL and apply scenario weights.
 7. Reconcile loan, stage and portfolio totals."""),
+M("Coverage, PD and LGD in the summary table are decimal ratios. Multiply by 100 to express a percentage."),
 C('query("select * from executive_summary")'),
 C('query("select * from stage_summary order by stage")'),
 C('query("select * from scenario_summary order by scenario")'),
