@@ -33,8 +33,8 @@ def build_reporting_tables(portfolio, transitions, scenarios, cube, scenario_ecl
         {"metric": "Mortgage accounts", "value": len(loan_ecl), "unit": "count"},
         {"metric": "Gross exposure", "value": total_exposure, "unit": "USD"},
         {"metric": "Probability-weighted ECL", "value": total_ecl, "unit": "USD"},
-        {"metric": "Portfolio coverage ratio", "value": total_ecl / total_exposure if total_exposure else np.nan, "unit": "percent"},
-        {"metric": "Performing exposure-weighted 12-month PD", "value": np.average(performing_loans["current_pd_12m"], weights=performing_loans["gross_exposure"]) if performing_exposure else np.nan, "unit": "percent"},
+        {"metric": "Portfolio coverage ratio", "value": total_ecl / total_exposure if total_exposure else np.nan, "unit": "decimal ratio"},
+        {"metric": "Performing exposure-weighted 12-month PD", "value": np.average(performing_loans["current_pd_12m"], weights=performing_loans["gross_exposure"]) if performing_exposure else np.nan, "unit": "decimal ratio"},
     ])
     stage = stage_summary.copy()
     stage["exposure_share"] = stage["gross_exposure"] / total_exposure
@@ -82,7 +82,7 @@ def build_reporting_tables(portfolio, transitions, scenarios, cube, scenario_ecl
     loan_lgd = loan_lgd[["loan_id", "average_lgd"]]
     account = account.merge(loan_lgd, on="loan_id", how="left")
     lgd_by_ltv = account.assign(ltv_band=pd.cut(account["current_ltv"], [0, 50, 60, 70, 80, 90, 100, 125, np.inf], include_lowest=True)).groupby("ltv_band", observed=False, as_index=False).agg(loans=("loan_id", "count"), exposure=("gross_exposure", "sum"), average_lgd=("average_lgd", "mean"), ecl=("loan_ecl", "sum"))
-    executive = pd.concat([executive, pd.DataFrame([{"metric": "ECL-driver-weighted performing LGD", "value": ecl_driver_lgd, "unit": "percent"}])], ignore_index=True)
+    executive = pd.concat([executive, pd.DataFrame([{"metric": "ECL-driver-weighted performing LGD", "value": ecl_driver_lgd, "unit": "decimal ratio"}])], ignore_index=True)
     # Public reporting tables use stable portfolio aliases. The local database retains source loan IDs
     # in its authoritative input and calculation tables.
     aliases = {loan_id: f"RM{number:06d}" for number, loan_id in enumerate(sorted(portfolio["loan_id"].astype(str).unique()), start=1)}

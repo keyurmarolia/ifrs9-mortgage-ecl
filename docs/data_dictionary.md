@@ -19,3 +19,7 @@
 - Macro: `unemployment_rate`, `gdp_growth_yoy`, `hpi_growth_yoy`, `mortgage_rate`, `hpi_factor`.
 
 Stage 3 rows intentionally have null conditional/survival/marginal/cumulative PD fields because their `period_ecl` is a discounted recovery cash shortfall, not a performing-loan probability calculation.
+
+## Summary export units
+
+In `executive_summary.csv`, coverage, PD and LGD are decimal ratios. Multiply by 100 to express a percentage. For example, 0.0007870576 corresponds to 0.07870576%. Excel applies percentage display formats separately.

@@ -115,3 +115,13 @@ def test_workbook_matches_current_reporting_structure_and_numeric_types():
         )
     assert "ChatGPT" not in xml
     assert "OpenAI" not in xml
+
+
+def test_summary_ratio_units_and_coverage_reconcile():
+    summary = table("executive_summary").set_index("metric")
+    account = table("account_level_ecl")
+    metrics = ["Portfolio coverage ratio", "Performing exposure-weighted 12-month PD", "ECL-driver-weighted performing LGD"]
+    assert summary.loc[metrics, "unit"].eq("decimal ratio").all()
+    reported = float(summary.loc["Portfolio coverage ratio", "value"])
+    expected = account["loan_ecl"].sum() / account["gross_exposure"].sum()
+    assert np.isclose(reported, expected, rtol=1e-10)

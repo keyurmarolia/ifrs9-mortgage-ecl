@@ -3,6 +3,6 @@ Reporting date,2026-03-01,date
 Mortgage accounts,3471,count
 Gross exposure,432963771.97,USD
 Probability-weighted ECL,340767.41028478945,USD
-Portfolio coverage ratio,0.0007870575608076538,percent
-Performing exposure-weighted 12-month PD,0.00945910181717043,percent
-ECL-driver-weighted performing LGD,0.02463763471312623,percent
+Portfolio coverage ratio,0.0007870575608076538,decimal ratio
+Performing exposure-weighted 12-month PD,0.00945910181717043,decimal ratio
+ECL-driver-weighted performing LGD,0.02463763471312623,decimal ratio
